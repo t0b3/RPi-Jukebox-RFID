@@ -35,6 +35,9 @@ JUKEBOX_BACKUP_DIR="${HOME_DIR}/BACKUP"
 
 # Get the Raspberry Pi OS codename (e.g. buster, bullseye, ...)
 OS_CODENAME="$( . /etc/os-release; printf '%s\n' "$VERSION_CODENAME"; )"
+# Get the Raspberry Pi OS version id (e.g. 11, 12, ...)
+OS_VERSION_ID="$( . /etc/os-release; printf '%s\n' "$VERSION_ID"; )"
+
 
 WIFI_INTERFACE="wlan0"
 
@@ -618,8 +621,6 @@ config_spotify() {
 # Please note your client_id and client_secret!
 #
 "
-            read -rp "Type your Spotify username: " SPOTIuser
-            read -rp "Type your Spotify password: " SPOTIpass
             read -rp "Type your client_id: " SPOTIclientid
             read -rp "Type your client_secret: " SPOTIclientsecret
             ;;
@@ -631,8 +632,6 @@ config_spotify() {
     # append variables to config file
     {
         echo "SPOTinstall=\"$(_escape_for_shell "$SPOTinstall")\"";
-        echo "SPOTIuser=\"$(_escape_for_shell "$SPOTIuser")\"";
-        echo "SPOTIpass=\"$(_escape_for_shell "$SPOTIpass")\"";
         echo "SPOTIclientid=\"$(_escape_for_shell "$SPOTIclientid")\"";
         echo "SPOTIclientsecret=\"$(_escape_for_shell "$SPOTIclientsecret")\""
     } >> "${HOME_DIR}/PhonieboxInstall.conf"
@@ -756,8 +755,6 @@ check_config_file() {
         echo "ERROR: \$SPOTinstall is missing or not set!" && fail=true
     else
         if [ "$SPOTinstall" == "YES" ]; then
-            check_variable "SPOTIuser"
-            check_variable "SPOTIpass"
             check_variable "SPOTIclientid"
             check_variable "SPOTIclientsecret"
         fi
@@ -837,6 +834,7 @@ install_main() {
     local apt_get="sudo apt-get -qq --yes"
     local allow_downgrades="--allow-downgrades --allow-remove-essential --allow-change-held-packages"
     local pip_install="sudo python3 -m pip install --upgrade --force-reinstall -q"
+    local pip_uninstall="sudo python3 -m pip uninstall -y -q"
 
     clear
 
@@ -915,6 +913,8 @@ install_main() {
     source "${jukebox_dir}"/scripts/helperscripts/inc.helper.sh
     source "${jukebox_dir}"/scripts/helperscripts/inc.networkHelper.sh
 
+    # Remove excluded libs, if installed - see https://github.com/MiczFlor/RPi-Jukebox-RFID/pull/2469
+    call_with_args_from_file "${jukebox_dir}"/packages-excluded.txt ${apt_get} ${allow_downgrades} remove
 
     # some packages are only available on raspberry pi's but not on test docker containers running on x86_64 machines
     if [[ $(uname -m) =~ ^armv.+$ ]]; then
@@ -948,6 +948,9 @@ install_main() {
     echo "${VERSION_NO} - ${COMMIT_NO} - ${USED_BRANCH}" > ${jukebox_dir}/settings/version
     chmod 777 ${jukebox_dir}/settings/version
 
+    # Remove excluded libs, if installed - see https://github.com/MiczFlor/RPi-Jukebox-RFID/pull/2469
+    ${pip_uninstall} -r "${jukebox_dir}"/requirements-excluded.txt
+
     # Install required spotify packages
     if [ "${SPOTinstall}" == "YES" ]; then
         echo "Installing dependencies for Spotify support..."
@@ -963,8 +966,8 @@ install_main() {
 
         # not yet available on apt.mopidy.com, so install manually
         local arch=$(dpkg --print-architecture)
-        local gst_plugin_spotify_name="gst-plugin-spotify_0.14.0.alpha.1-1_${arch}.deb"
-        wget -q https://github.com/kingosticks/gst-plugins-rs-build/releases/download/gst-plugin-spotify_0.14.0-alpha.1-1/${gst_plugin_spotify_name}
+        local gst_plugin_spotify_name="gst-plugin-spotify_0.15.0.alpha.1-4_${arch}.deb"
+        wget -q https://github.com/kingosticks/gst-plugins-rs-build/releases/download/gst-plugin-spotify_0.15.0-alpha.1-4/${gst_plugin_spotify_name}
         ${apt_get} install ./${gst_plugin_spotify_name}
         sudo rm -f ${gst_plugin_spotify_name}
 
@@ -979,9 +982,15 @@ install_main() {
         sudo chmod 440 "${sudoers_mopidy}"
     fi
 
+    # always build lgpio as the pypi binaries are incomplete (armv6, python3.13) or broken (bullseye)
+    echo "Installing lgpio build dependecies..."
+    mkdir -p tmp && cd tmp && wget -q http://abyz.me.uk/lg/lg.zip && unzip lg.zip > /dev/null && cd lg && make && sudo make install
+    cd "${HOME_DIR}" && sudo rm -rf tmp > /dev/null
+
     # Install more required packages
     echo "Installing additional Python packages..."
     ${pip_install} -r "${jukebox_dir}"/requirements.txt
+
 
     samba_config
 
@@ -1096,8 +1105,6 @@ install_main() {
         sudo locale-gen
         sudo cp "${jukebox_dir}"/misc/sampleconfigs/mopidy.conf.sample "${mopidy_conf}"
         # Change vars to match install config
-        sudo sed -i 's|%spotify_username%|'"$(escape_for_sed "$SPOTIuser")"'|' "${mopidy_conf}"
-        sudo sed -i 's|%spotify_password%|'"$(escape_for_sed "$SPOTIpass")"'|' "${mopidy_conf}"
         sudo sed -i 's|%spotify_client_id%|'"$(escape_for_sed "$SPOTIclientid")"'|' "${mopidy_conf}"
         sudo sed -i 's|%spotify_client_secret%|'"$(escape_for_sed "$SPOTIclientsecret")"'|' "${mopidy_conf}"
         # for $DIRaudioFolders using | as alternate regex delimiter because of the folder path slash
